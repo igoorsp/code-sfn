@@ -1,7 +1,11 @@
 package com.camunda.lambda;
 
 import com.amazonaws.services.lambda.runtime.Context;
+import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import com.amazonaws.services.lambda.runtime.events.SQSEvent;
+import com.camunda.lambda.domain.Message;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sfn.SfnClient;
 import software.amazon.awssdk.services.sfn.model.SendTaskFailureRequest;
@@ -9,46 +13,63 @@ import software.amazon.awssdk.services.sfn.model.SendTaskSuccessRequest;
 
 import java.util.Map;
 
-public class CallbackLambda implements RequestHandler<Map<String, Object>, String> {
+public class CallbackLambda implements RequestHandler<SQSEvent, Message> {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Override
-    public String handleRequest(Map<String, Object> input, Context context) {
-        // Exemplo: extrair o TaskToken do input
-        String taskToken = (String) input.get("TaskToken");
+    public Message handleRequest(SQSEvent input, Context context) {
+        LambdaLogger logger = context.getLogger();
+        logger.log("Inputs recebidos: " + input);
 
-        if (taskToken == null) {
-            context.getLogger().log("Nenhum TaskToken encontrado no input!");
-            return "Nenhum token encontrado!";
+        input.getRecords().forEach(message -> processMessage(message, logger));
+        return Message.builder()
+                .messageField("success").build();
+    }
+
+    private void processMessage(SQSEvent.SQSMessage message, LambdaLogger logger) {
+        try {
+            var body = message.getBody();
+            logger.log("Mensagem body: " + body);
+
+            // Converte o body para um mapa
+            var bodyMap = OBJECT_MAPPER.readValue(body, Map.class);
+
+            var taskToken = (String) bodyMap.get("TaskToken");
+            if (taskToken == null) {
+                logger.log("Nenhum TaskToken encontrado na mensagem!");
+                return;
+            }
+
+            // Executa a lógica de negócio
+            boolean tarefaBemSucedida = true; // Simule uma lógica aqui
+            handleTaskCallback(taskToken, tarefaBemSucedida, logger);
+
+        } catch (Exception e) {
+            logger.log("Erro ao processar a mensagem: " + e.getMessage());
         }
+    }
 
-        // Aqui você pode fazer alguma lógica de negócio.
-        // Exemplo simples: decidir se queremos mandar sucesso ou falha.
-        boolean tarefaBemSucedida = true; // Troque de acordo com sua lógica
-
-        try (SfnClient sfnClient = SfnClient.builder()
-                .region(Region.SA_EAST_1)
-                .build()) {
-
-            if (tarefaBemSucedida) {
-                // Envia mensagem de sucesso para a Step Function
-                sfnClient.sendTaskSuccess(SendTaskSuccessRequest.builder()
+    private void handleTaskCallback(String taskToken, boolean success, LambdaLogger logger) {
+        try (var sfnClient = SfnClient.builder().region(Region.SA_EAST_1).build()) {
+            if (success) {
+                var request = SendTaskSuccessRequest.builder()
                         .taskToken(taskToken)
-                        .output("{\"status\":\"OK\"}") // JSON com o resultado que irá para a Step Function
-                        .build());
-                context.getLogger().log("SendTaskSuccess chamado com sucesso!");
+                        .output("{\"status\":\"OK\"}")
+                        .build();
+                sfnClient.sendTaskSuccess(request);
+                logger.log("SendTaskSuccess chamado com sucesso!");
             } else {
-                // Envia mensagem de falha para a Step Function
-                sfnClient.sendTaskFailure(SendTaskFailureRequest.builder()
+                var request = SendTaskFailureRequest.builder()
                         .taskToken(taskToken)
                         .error("ErroExemplo")
                         .cause("Algum motivo de falha")
-                        .build());
-                context.getLogger().log("SendTaskFailure chamado!");
+                        .build();
+                sfnClient.sendTaskFailure(request);
+                logger.log("SendTaskFailure chamado!");
             }
         } catch (Exception e) {
-            context.getLogger().log("Erro no callback: " + e.getMessage());
+            logger.log("Erro ao enviar o callback para a Step Functions: " + e.getMessage());
         }
-
-        return "Processamento finalizado!";
     }
 }
