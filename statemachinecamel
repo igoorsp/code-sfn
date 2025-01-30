@@ -1,0 +1,192 @@
+{
+  "QueryLanguage": "JSONata",
+  "Comment": "A description of my state machine",
+  "StartAt": "VerificarExistenciaOperacaoFrontOffice",
+  "States": {
+    "VerificarExistenciaOperacaoFrontOffice": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "NecessarioOperacao"
+    },
+    "NecessarioOperacao": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% necessarioOperacao == false %}",
+          "Next": "Success"
+        },
+        {
+          "Condition": "{% necessarioOperacao == true %}",
+          "Next": "Reexecucao"
+        }
+      ]
+    },
+    "Reexecucao": {
+      "Type": "Pass",
+      "Next": "OperacaoCancelamentoAndRegistrarOperacao"
+    },
+    "OperacaoCancelamentoAndRegistrarOperacao": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "SQS SendMessage"
+    },
+    "SQS SendMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Arguments": {
+        "MessageBody": "{% $states.input %}"
+      },
+      "TimeoutSeconds": 3600,
+      "HeartbeatSeconds": 3600,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.Timeout"
+          ],
+          "Comment": "Timeout",
+          "Next": "RegistrarInicidenteCamunda"
+        },
+        {
+          "ErrorEquals": []
+        }
+      ],
+      "Next": "Call HTTPS APIs"
+    },
+    "Call HTTPS APIs": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "RegistradoMurexComSucesso"
+    },
+    "RegistradoMurexComSucesso": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Call HTTPS APIs (1)",
+          "Condition": "{% realizadoComSucesso == false %}"
+        },
+        {
+          "Next": "Call HTTPS APIs (2)",
+          "Condition": "{% realizadoComSucesso == true %}"
+        }
+      ]
+    },
+    "Call HTTPS APIs (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "SQS SendMessage (1)"
+    },
+    "SQS SendMessage (1)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Arguments": {
+        "MessageBody": "{% $states.input %}"
+      },
+      "Next": "necessarioReexecucao"
+    },
+    "necessarioReexecucao": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Success",
+          "Condition": "{% necessarioReexecucao == false %}"
+        },
+        {
+          "Next": "Reexecucao",
+          "Condition": "{% necessarioReexecucao == true %}"
+        }
+      ]
+    },
+    "RegistrarInicidenteCamunda": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "",
+        "Payload": "{% $states.input %}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "End": true
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Call HTTPS APIs (2)": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Success"
+    }
+  }
+}
