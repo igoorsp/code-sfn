@@ -1,0 +1,211 @@
+{
+  "Comment": "Fluxo completo com chamadas HTTP para o Camel no EKS",
+  "StartAt": "Start",
+  "States": {
+    "Start": {
+      "Type": "Pass",
+      "Next": "ServiceTask1"
+    },
+    "ServiceTask1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "https://<api-gateway-or-eks-endpoint>/api/task1",
+        "Method": "POST",
+        "RequestBody": {
+          "input": "data"
+        }
+      },
+      "Next": "ExclusiveGatewayCatchEvent"
+    },
+    "ExclusiveGatewayCatchEvent": {
+      "Type": "Pass",
+      "Next": "ExclusiveGatewayCancelamento"
+    },
+    "ExclusiveGatewayCancelamento": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.operacaoCancelamento",
+          "BooleanEquals": true,
+          "Next": "ExclusiveGatewayFinal"
+        },
+        {
+          "Variable": "$.operacaoCancelamento",
+          "BooleanEquals": false,
+          "Next": "ServiceTask2"
+        }
+      ]
+    },
+    "ServiceTask2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "https://<api-gateway-or-eks-endpoint>/api/task2",
+        "Method": "POST",
+        "RequestBody": {
+          "input": "data"
+        }
+      },
+      "Next": "ExclusiveGatewayFinal"
+    },
+    "ExclusiveGatewayFinal": {
+      "Type": "Pass",
+      "Next": "ServiceTask3"
+    },
+    "ServiceTask3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "https://<api-gateway-or-eks-endpoint>/api/task3",
+        "Method": "POST",
+        "RequestBody": {
+          "input": "data"
+        }
+      },
+      "Next": "SQS SendMessage"
+    },
+    "SQS SendMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "MessageBody.$": "$"
+      },
+      "Next": "ServiceTask4",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.Timeout"
+          ],
+          "Next": "LambdaTimeout"
+        }
+      ]
+    },
+    "ServiceTask4": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "https://<api-gateway-or-eks-endpoint>/api/task4",
+        "Method": "POST",
+        "RequestBody": {
+          "input": "data"
+        }
+      },
+      "Next": "ExclusiveGatewayRegistro"
+    },
+    "ExclusiveGatewayRegistro": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.registroSucesso",
+          "BooleanEquals": true,
+          "Next": "ServiceTask5"
+        },
+        {
+          "Variable": "$.registroSucesso",
+          "BooleanEquals": false,
+          "Next": "AtualizarStatusErro"
+        }
+      ]
+    },
+    "AtualizarStatusErro": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "HumanTask"
+    },
+    "HumanTask": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "MessageBody.$": "$"
+      },
+      "Next": "ExclusiveGatewayReexecutar",
+      "TimeoutSeconds": 3600,
+      "HeartbeatSeconds": 3600
+    },
+    "ServiceTask5": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "https://<api-gateway-or-eks-endpoint>/api/task5",
+        "Method": "POST",
+        "RequestBody": {
+          "input": "data"
+        }
+      },
+      "Next": "RegistroBoletoDead"
+    },
+    "RegistroBoletoDead": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.registroDead",
+          "StringEquals": "true",
+          "Next": "Success"
+        }
+      ],
+      "Default": "Call HTTPS APIs"
+    },
+    "Call HTTPS APIs": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {},
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "BackoffRate": 2,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Success (1)"
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "ExclusiveGatewayReexecutar": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.reexecutar",
+          "BooleanEquals": true,
+          "Next": "ExclusiveGatewayCatchEvent"
+        },
+        {
+          "Variable": "$.reexecutar",
+          "BooleanEquals": false,
+          "Next": "Success (1)"
+        }
+      ]
+    },
+    "LambdaTimeout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-east-1:123456789012:function:TimeoutFunction",
+        "Payload": {
+          "input": "data"
+        }
+      },
+      "Next": "Success (1)"
+    },
+    "Success (1)": {
+      "Type": "Succeed"
+    }
+  }
+}
